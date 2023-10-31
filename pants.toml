@@ -1,0 +1,36 @@
+[GLOBAL]
+pants_version = "2.17.0"
+backend_packages = [
+   "pants.backend.plugin_development",
+   "pants.backend.docker",
+   "pants.backend.python",
+   "oras",
+]
+pythonpath=["%(buildroot)s/pants-plugins"]
+
+[source]
+root_patterns = [
+   "pants-plugins",
+]
+
+[docker.registries.test]
+# The default image registry. Change this, or add more registries if the deployment destination changes. 
+address = "test.azurecr.io"
+default = true
+repository = "{name}"
+extra_image_tags = [
+   "latest",
+]
+
+[python]
+enable_resolves = true
+interpreter_constraints=[
+   "CPython==3.9.*",
+]
+
+[python.resolves]
+pants-plugins = "pants-plugins/pants-plugins.lock"
+
+[anonymous-telemetry]
+enabled = true
+repo_id = "E76F8DC8-D665-42DE-9E57-2208E10C7849"
