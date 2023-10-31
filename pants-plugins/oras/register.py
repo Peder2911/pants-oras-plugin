@@ -40,7 +40,7 @@ class OrasPublishFieldSet(OrasArtifactFieldset, pants.core.goals.publish.Publish
 
 @pants.engine.rules.rule(desc = "Publish ORAS Artifact to OCI registries", level = pants.util.logging.LogLevel.WARN)
 async def publish_test(request: PublishOrasRequest) -> pants.core.goals.publish.PublishProcesses:
-    logger.critical("YOOOOO")
+    logger.critical("Hello world")
     return pants.core.goals.publish.PublishProcesses([
         pants.core.goals.publish.PublishPackages(
             names = (request.field_set.name,),
