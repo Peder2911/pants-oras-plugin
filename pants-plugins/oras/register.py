@@ -15,12 +15,12 @@ Rules:
 ┌───────────────────┐  ┌────────────┐
 │OrasPackageFieldSet│─►│BuiltPackage│
 └───────────────────┘  └────────────┘
-
-┌───────────────────┐
-│OrasPublishFieldSet│
-└───────────────────┘
-      ▲
-      │  has a
+                              │
+┌───────────────────┐         │
+│OrasPublishFieldSet│         ?
+└───────────────────┘         │
+      ▲                       │
+      │  has a                ▼
 ┌──────────────────┐  ┌────────────────┐
 │PublishOrasRequest│─►│PublishProcesses│
 └──────────────────┘  └────────────────┘
@@ -39,12 +39,16 @@ import pants.engine.fs
 
 logger = logging.getLogger(__name__)
 
+# Fields =
+
 class OrasArtifactSourcesField(pants.engine.target.MultipleSourcesField):
     alias = "sources"
 
 class OrasArtifactTagField(pants.engine.target.StringField):
     required =  True
     alias = "tag"
+
+# Targets =
 
 class OrasArtifact(pants.engine.target.Target):
     alias = "oras_artifact"
@@ -54,9 +58,16 @@ class OrasArtifact(pants.engine.target.Target):
             OrasArtifactTagField,
         )
 
+# Intermediate steps =
+
 class BuiltOrasArtifact(pants.core.goals.package.BuiltPackageArtifact):
     sha: str = ""
     tag: str = ""
+
+class PublishOrasRequest(pants.core.goals.publish.PublishRequest):
+    ...
+
+# Fieldsets =
 
 @dataclasses.dataclass(frozen = True)
 class OrasArtifactFieldset(pants.engine.target.FieldSet):
@@ -67,9 +78,6 @@ class OrasArtifactFieldset(pants.engine.target.FieldSet):
 
     sources: OrasArtifactSourcesField
     tag: OrasArtifactTagField
-
-class PublishOrasRequest(pants.core.goals.publish.PublishRequest):
-    ...
 
 @dataclasses.dataclass(frozen = True)
 class OrasPublishFieldSet(OrasArtifactFieldset, pants.core.goals.publish.PublishFieldSet):
@@ -85,6 +93,7 @@ class OrasPublishFieldSet(OrasArtifactFieldset, pants.core.goals.publish.Publish
 class OrasArtifactPackageFieldSet(OrasArtifactFieldset, pants.core.goals.package.PackageFieldSet):
     ...
 
+# Rules =
 
 @pants.engine.rules.rule(desc = "Package files into an ORAS artifact", level = pants.util.logging.LogLevel.WARN)
 async def package_oras_artifact(fieldset: OrasArtifactPackageFieldSet) -> pants.core.goals.package.BuiltPackage:
@@ -93,6 +102,14 @@ async def package_oras_artifact(fieldset: OrasArtifactPackageFieldSet) -> pants.
     result = await pants.engine.rules.Get(
             pants.engine.process.ProcessResult,
             pants.engine.process.Process(["/bin/echo",tag], description = "do nothing"))
+    ls = await pants.engine.rules.Get(
+            pants.engine.process.ProcessResult,
+            pants.engine.process.Process(["/bin/ls"], description = "do nothing"))
+    logger.critical(ls.stdout)
+    pwd = await pants.engine.rules.Get(
+            pants.engine.process.ProcessResult,
+            pants.engine.process.Process(["/bin/pwd"], description = "do nothing"))
+    logger.critical(pwd.stdout)
     return pants.core.goals.package.BuiltPackage(
             digest = result.output_digest,
             artifacts = (BuiltOrasArtifact(relpath = None),)
@@ -105,8 +122,10 @@ async def publish_test(request: PublishOrasRequest) -> pants.core.goals.publish.
     return pants.core.goals.publish.PublishProcesses([
         pants.core.goals.publish.PublishPackages(
             names = (request.field_set.tag,),
-            description = "YEE YEE")
+            description = "Not publishing anything!")
         ])
+
+# Register =
 
 def rules():
     return [
