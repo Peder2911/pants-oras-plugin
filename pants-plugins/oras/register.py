@@ -18,6 +18,8 @@ import pants.util.logging
 import pants.engine.fs
 import pants.base.build_root
 import oras.subsystem
+import functools
+import operator
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,8 @@ class OrasArtifactTypeField(pants.engine.target.StringField):
     alias = "artifact_type"
     default = "application/vnd.unknown.artifact.v1"
 
+class OrasArtifactAnnotationsField(pants.engine.target.DictStringToStringField):
+    alias = "annotations"
 
 # Targets =
 
@@ -51,8 +55,20 @@ class OrasArtifact(pants.engine.target.Target):
         OrasArtifactDependencies,
         OrasArtifactRepositoryField,
         OrasArtifactTypeField,
+        OrasArtifactAnnotationsField,
     )
 
+
+class OrasAttachment(pants.engine.target.Target):
+    alias = "oras_attachment"
+    core_fields = (
+        *pants.engine.target.COMMON_TARGET_FIELDS,
+        OrasArtifactLayersField,
+        OrasArtifactDependencies,
+        OrasArtifactRepositoryField,
+        OrasArtifactTypeField,
+        OrasArtifactAnnotationsField,
+    )
 
 # Intermediate steps =
 
@@ -92,7 +108,8 @@ class OrasArtifactFieldset(pants.engine.target.FieldSet):
     required_fields = (OrasArtifactLayersField, OrasArtifactRepositoryField, OrasArtifactRepositoryField)
     layers: OrasArtifactLayersField
     repository: OrasArtifactRepositoryField
-    type: OrasArtifactTypeField
+    artifact_type: OrasArtifactTypeField
+    annotations: OrasArtifactAnnotationsField
 
 class OrasArtifactPackageFieldSet(
     OrasArtifactFieldset, pants.core.goals.package.PackageFieldSet
@@ -158,7 +175,7 @@ async def get_git_info(request: GitInfoRequest, root: pants.base.build_root.Buil
 
     return GitInfo(
             commit_hash=git_commit_hash,
-            git_tags = git_tags
+            git_tags = tuple(git_tags)
         )
 
 @pants.engine.rules.rule()
@@ -219,12 +236,21 @@ async def publish_oras_artifact(
             ))
 
     tags = ["latest"] + git_info.tags
+    annotations = functools.reduce(operator.add, [
+        ["--annotation", f"{k}={v}"] for k,v in request.field_set.annotations.value.items()
+    ])
     for registry in oras.registries:
         url = registry.strip("/") + "/" + request.field_set.repository.value
         publish = await pants.engine.rules.Get(
                 pants.engine.process.ProcessResult,
                 pants.engine.process.Process(
-                    [oras_bin.exe, "push", url, *layer_args],
+                    [
+                        oras_bin.exe, 
+                        "push", 
+                        "--artifact-type", request.field_set.artifact_type.value,
+                        *annotations,
+                        url, 
+                        *layer_args],
                     input_digest = digest,
                     description = f"Push to {url}",
                     env={"HOME": "~/"},
@@ -263,4 +289,5 @@ def rules():
 def target_types():
     return [
         OrasArtifact,
+        OrasAttachment,
     ]
