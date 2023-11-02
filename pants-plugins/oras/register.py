@@ -1,30 +1,7 @@
 """
 Build files into Oras Artifacts for publication.
-
-Targets:
-┌────────────┐
-│OrasArtifact│
-└────────────┘
-      ├────────────────────────┐
-      ▼        satisfies       ▼
-┌───────────────────┐┌───────────────────┐
-│OrasPublishFieldSet││OrasPackageFieldSet│
-└───────────────────┘└───────────────────┘
-
-Rules:                
-┌───────────────────┐  ┌────────────┐
-│OrasPackageFieldSet│─►│BuiltPackage│
-└───────────────────┘  └────────────┘
-                              │
-┌───────────────────┐         │
-│OrasPublishFieldSet│         ?
-└───────────────────┘         │
-      ▲                       │
-      │  has a                ▼
-┌──────────────────┐  ┌────────────────┐
-│PublishOrasRequest│─►│PublishProcesses│
-└──────────────────┘  └────────────────┘
 """
+import typing
 import logging
 import dataclasses
 import pants.core.goals.publish
@@ -35,9 +12,11 @@ import pants.engine.process
 import pants.engine.console
 import pants.core.goals.package
 import pants.core.util_rules.external_tool
+import pants.core.util_rules.system_binaries
 import pants.engine.unions
 import pants.util.logging
 import pants.engine.fs
+import pants.base.build_root
 import oras.subsystem
 
 logger = logging.getLogger(__name__)
@@ -45,17 +24,20 @@ logger = logging.getLogger(__name__)
 # Fields =
 
 
-class OrasArtifactSourcesField(pants.engine.target.MultipleSourcesField):
-    alias = "sources"
-
-
-class OrasArtifactTagField(pants.engine.target.StringField):
-    required = True
-    alias = "tag"
-
-
 class OrasArtifactDependencies(pants.engine.target.Dependencies):
     alias = "dependencies"
+
+
+class OrasArtifactLayersField(pants.engine.target.DictStringToStringField):
+    alias = "layers"
+
+
+class OrasArtifactRepositoryField(pants.engine.target.StringField):
+    alias = "repository"
+
+class OrasArtifactTypeField(pants.engine.target.StringField):
+    alias = "artifact_type"
+    default = "application/vnd.unknown.artifact.v1"
 
 
 # Targets =
@@ -65,9 +47,10 @@ class OrasArtifact(pants.engine.target.Target):
     alias = "oras_artifact"
     core_fields = (
         *pants.engine.target.COMMON_TARGET_FIELDS,
-        OrasArtifactSourcesField,
-        OrasArtifactTagField,
+        OrasArtifactLayersField,
         OrasArtifactDependencies,
+        OrasArtifactRepositoryField,
+        OrasArtifactTypeField,
     )
 
 
@@ -82,24 +65,45 @@ class BuiltOrasArtifact(pants.core.goals.package.BuiltPackageArtifact):
 class PublishOrasRequest(pants.core.goals.publish.PublishRequest):
     ...
 
+@dataclasses.dataclass(frozen = True)
+class OrasLayers:
+    layers: tuple[tuple[str, str], ...]
+    digest: pants.engine.fs.Digest
+
+@dataclasses.dataclass(frozen = True)
+class GitInfo:
+    commit_hash: typing.Optional[str] = None
+    git_tags: tuple[str, ...] = tuple() 
+
+    @property
+    def tags(self):
+        return list(self.git_tags) + [self.commit_hash] if self.commit_hash else []
+
+@dataclasses.dataclass(frozen = True)
+class GitInfoRequest:
+    get_commit_hash: bool = True
+    get_tags: bool = True
 
 # Fieldsets =
 
 
 @dataclasses.dataclass(frozen=True)
 class OrasArtifactFieldset(pants.engine.target.FieldSet):
-    required_fields = (OrasArtifactSourcesField, OrasArtifactTagField)
+    required_fields = (OrasArtifactLayersField, OrasArtifactRepositoryField, OrasArtifactRepositoryField)
+    layers: OrasArtifactLayersField
+    repository: OrasArtifactRepositoryField
+    type: OrasArtifactTypeField
 
-    sources: OrasArtifactSourcesField
-    tag: OrasArtifactTagField
-
+class OrasArtifactPackageFieldSet(
+    OrasArtifactFieldset, pants.core.goals.package.PackageFieldSet
+):
+    ...
 
 @dataclasses.dataclass(frozen=True)
 class OrasPublishFieldSet(
     OrasArtifactFieldset, pants.core.goals.publish.PublishFieldSet
 ):
     publish_request_type = PublishOrasRequest
-    sources: OrasArtifactSourcesField
 
     def get_output_data(self) -> pants.core.goals.publish.PublishOutputData:
         return pants.core.goals.publish.PublishOutputData(
@@ -109,74 +113,142 @@ class OrasPublishFieldSet(
             }
         )
 
-
-class OrasArtifactPackageFieldSet(
-    OrasArtifactFieldset, pants.core.goals.package.PackageFieldSet
-):
-    ...
-
-
 # Rules =
 
+@pants.engine.rules.rule()
+async def get_git_info(request: GitInfoRequest, root: pants.base.build_root.BuildRoot) -> GitInfo:
+    git_paths = await pants.engine.rules.Get(
+            pants.core.util_rules.system_binaries.BinaryPaths,
+            pants.core.util_rules.system_binaries.BinaryPathRequest(binary_name = "git", search_path = ["/usr/bin","/bin"])
+        )
+    git_bin = git_paths.first_path
+    if git_bin is None and any([request.get_commit_hash, request.get_tags]):
+        raise OSError("The ORAS backend requires `git`.")
+    else:
+        git_bin = typing.cast(pants.core.util_rules.system_binaries.BinaryPath, git_bin)
+
+    if request.get_commit_hash:
+        git_commit_hash_proc = await pants.engine.rules.Get(
+            pants.engine.process.ProcessResult,
+            pants.engine.process.Process(
+                argv=[git_bin.path, "-C", root.path, "log", "-n1", "--format=%H"],
+                description="Get current git commit hash.",
+                cache_scope=pants.engine.process.ProcessCacheScope.PER_SESSION,
+            ),
+        )
+        git_commit_hash = git_commit_hash_proc.stdout.decode().strip("\n")
+    else:
+        git_commit_hash = None
+
+    if request.get_tags:
+        git_tags_proc = await pants.engine.rules.Get(
+            pants.engine.process.ProcessResult,
+            pants.engine.process.Process(
+                argv=[git_bin.path, "-C", root.path, "tag", "-l"],
+                description="Get git tags for current commit.",
+                cache_scope=pants.engine.process.ProcessCacheScope.PER_SESSION,
+            ),
+        )
+        git_tags = [
+            *[t.strip() for t in git_tags_proc.stdout.decode().split("\n") if t],
+        ]
+
+    else:
+        git_tags = [] 
+
+    return GitInfo(
+            commit_hash=git_commit_hash,
+            git_tags = git_tags
+        )
+
+@pants.engine.rules.rule()
+async def get_layers_digest(field: OrasArtifactLayersField) -> OrasLayers:
+    if field.value is None:
+        raise pants.engine.target.InvalidFieldException("Artifact must have at least one layer")
+    digest = await pants.engine.rules.Get(pants.engine.fs.Digest, pants.engine.fs.PathGlobs(field.value.keys()))
+    return OrasLayers(
+            layers = tuple(field.value.items()),
+            digest = digest,
+        )
 
 @pants.engine.rules.rule(
     desc="Package files into an ORAS artifact", level=pants.util.logging.LogLevel.WARN
 )
 async def package_oras_artifact(
-    fieldset: OrasArtifactPackageFieldSet,
+    _: OrasArtifactPackageFieldSet,
 ) -> pants.core.goals.package.BuiltPackage:
-    if (tag := fieldset.tag.value) is None:
-        raise pants.engine.target.InvalidTargetException("Must provide a value to tag.")
-    result = await pants.engine.rules.Get(
-        pants.engine.process.ProcessResult,
-        pants.engine.process.Process(["/bin/echo", tag], description="do nothing"),
-    )
-    return pants.core.goals.package.BuiltPackage(
-        digest=result.output_digest, artifacts=(BuiltOrasArtifact(relpath=None),)
-    )
+    return pants.core.goals.package.BuiltPackage(digest = pants.engine.fs.EMPTY_DIGEST, artifacts=tuple())
 
 
 @pants.engine.rules.rule(
     desc="Publish ORAS Artifact to OCI registries",
     level=pants.util.logging.LogLevel.WARN,
 )
-async def publish_test(
+async def publish_oras_artifact(
     request: PublishOrasRequest,
-    oras: oras.subsystem.OrasTool,
+    oras_tool: oras.subsystem.OrasTool,
+    oras: oras.subsystem.Oras,
     platform: pants.engine.platform.Platform,
 ) -> pants.core.goals.publish.PublishProcesses:
+
     oras_bin = await pants.engine.rules.Get(
         pants.core.util_rules.external_tool.DownloadedExternalTool,
         pants.core.util_rules.external_tool.ExternalToolRequest,
-        oras.get_request(platform),
+        oras_tool.get_request(platform),
     )
-    logger.critical(oras_bin)
 
-    ls = await pants.engine.rules.Get(
-        pants.engine.process.ProcessResult,
-        pants.engine.process.Process(["/bin/ls"], description="see what's here"),
-    )
-    logger.critical(ls.stdout)
+    layers = await pants.engine.rules.Get(
+                OrasLayers,
+                OrasArtifactLayersField,
+                request.field_set.layers,
+            )
 
-    test = await pants.engine.rules.Get(
-        pants.engine.process.ProcessResult,
-        pants.engine.process.Process(
-            argv=[oras_bin.exe, "version"],
-            description="do nothing",
-        ),
-    )
-    logger.critical(test.stdout)
+    digest = await pants.engine.rules.Get(
+            pants.engine.fs.Digest, 
+            pants.engine.fs.MergeDigests([layers.digest, oras_bin.digest]))
+
+    layer_args = [f"{k}:{v}" for k,v in layers.layers]
+
+    procs: list[tuple[str, pants.engine.process.Process]] = []
+
+    git_info = await pants.engine.rules.Get(
+            GitInfo,
+            GitInfoRequest(
+                get_commit_hash=oras.use_git_commit_hash,
+                get_tags=oras.use_git_commit_tags
+            ))
+
+    tags = ["latest"] + git_info.tags
+    for registry in oras.registries:
+        url = registry.strip("/") + "/" + request.field_set.repository.value
+        publish = await pants.engine.rules.Get(
+                pants.engine.process.ProcessResult,
+                pants.engine.process.Process(
+                    [oras_bin.exe, "push", url, *layer_args],
+                    input_digest = digest,
+                    description = f"Push to {url}",
+                    env={"HOME": "~/"},
+                ))
+        sha = publish.stdout.splitlines()[-1].split()[-1]
+        for tag in tags:
+            procs.append((f"{url}:{tag}", pants.engine.process.Process(
+                    [oras_bin.exe, "tag", url+f"@{sha.decode()}", url+":"+tag],
+                    input_digest = oras_bin.digest,
+                    description=f"Tag {url} with {tag}",
+                    env={"HOME": "~/"},
+                )))
+
     return pants.core.goals.publish.PublishProcesses(
         [
             pants.core.goals.publish.PublishPackages(
-                names=(request.field_set.tag,), description="Not publishing anything!"
+                names=(name, ), 
+                process =  pants.engine.process.InteractiveProcess.from_process(proc),
             )
+            for name,proc in procs 
         ]
     )
 
-
 # Register =
-
 
 def rules():
     return [

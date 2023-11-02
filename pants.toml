@@ -34,3 +34,8 @@ pants-plugins = "pants-plugins/pants-plugins.lock"
 [anonymous-telemetry]
 enabled = true
 repo_id = "E76F8DC8-D665-42DE-9E57-2208E10C7849"
+
+[oras]
+registries = [
+   "localhost:5000",
+]

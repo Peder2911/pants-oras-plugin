@@ -5,10 +5,28 @@ import pants.option.option_types
 import pants.engine.platform
 
 class Oras(pants.option.subsystem.Subsystem):
-    ...
+    options_scope = "oras"
+    help = """
+        ORAS is a tool for uploading whatever you want to an OCI registry.
+    """
+
+    registries = pants.option.option_types.StrListOption(
+            help = "A list of registries to push artifacts to.",
+            default = list() 
+            )
+
+    use_git_commit_hash = pants.option.option_types.BoolOption(
+            help = "Should pushed artifacts be tagged with the current Git commit hash?",
+            default = True,
+            )
+
+    use_git_commit_tags = pants.option.option_types.BoolOption(
+            help = "Should pushed artifacts be tagged with the Git tags associated with the current commit?",
+            default = True,
+            )
 
 class OrasTool(pants.core.util_rules.external_tool.ExternalTool):
-    options_scope = "oras"
+    options_scope = "oras-cli"
     help = "Upload and download things from an OCI registry."
     default_version = "1.1.0"
 
@@ -24,7 +42,6 @@ class OrasTool(pants.core.util_rules.external_tool.ExternalTool):
     def generate_url(self, plat: pants.engine.platform.Platform) -> str:
         platform = plat.value.replace("macos","darwin").replace("amd64","x86_64")
         return f"https://github.com/oras-project/oras/releases/download/v{self.version}/oras_{self.version}_{platform}.tar.gz"
-
 
 def rules():
     return [
