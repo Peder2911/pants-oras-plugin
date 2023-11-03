@@ -10,18 +10,3 @@ oras_artifact(
       "buildtool": "pantsbuild",
    }
 )
-
-oras_attachment(
-   name = "test-oras-attach",
-   repository = "hello-from-pants",
-   artifact_type = "application/vnd.me.pants-test.checksum",
-   layers = {
-      "sum": "text/plain",
-   },
-   annotations = {
-      "buildtool": "pantsbuild",
-   },
-   dependencies = [
-      ":test-oras",
-   ],
-)
