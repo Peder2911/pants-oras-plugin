@@ -1,10 +1,11 @@
 """
 Build files into Oras Artifacts for publication.
 """
-import oras.targets
+import oras.git
 import oras.goals.package
 import oras.goals.publish
-import oras.git
+import oras.targets
+
 
 def rules():
     return [
@@ -16,6 +17,4 @@ def rules():
 
 
 def target_types():
-    return [
-        *oras.targets.target_types()
-    ]
+    return [*oras.targets.target_types()]

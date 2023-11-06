@@ -7,17 +7,18 @@ have an associated internal build step.
 
 This module defines the mock intermediate steps and goals needed to perform publish.
 """
-import pants.engine.rules
-import pants.engine.unions
+import oras.targets
 import pants.core.goals.package
 import pants.engine.fs
+import pants.engine.rules
+import pants.engine.unions
 import pants.util.logging
-import oras.targets
 
 
 class BuiltOrasArtifact(pants.core.goals.package.BuiltPackageArtifact):
     sha: str = ""
     tag: str = ""
+
 
 class OrasArtifactPackageFieldSet(
     oras.targets.OrasArtifactFieldset, pants.core.goals.package.PackageFieldSet
@@ -31,7 +32,10 @@ class OrasArtifactPackageFieldSet(
 async def package_oras_artifact(
     _: OrasArtifactPackageFieldSet,
 ) -> pants.core.goals.package.BuiltPackage:
-    return pants.core.goals.package.BuiltPackage(digest = pants.engine.fs.EMPTY_DIGEST, artifacts=tuple())
+    return pants.core.goals.package.BuiltPackage(
+        digest=pants.engine.fs.EMPTY_DIGEST, artifacts=tuple()
+    )
+
 
 def rules():
     return [
